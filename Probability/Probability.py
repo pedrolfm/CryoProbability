@@ -253,8 +253,10 @@ class ProbabilityWidget(ScriptedLoadableModuleWidget, VTKObservationMixin):
         self._parameterNode.EndModify(wasModified)
 
     def onApplyButton(self):
-        prob = self.logic.runProbability(self.ui.inputProbeLocation.currentNode(),self.ui.inputSelector.currentNode(),self.ui.errorInPlane.value,self.ui.errorDepth.value)
-        self.ui.resultsLabel.setText(str(prob))
+        t1 = time.time()
+        percentage,prob = self.logic.runProbability(self.ui.inputProbeLocation.currentNode(),self.ui.inputSelector.currentNode(),self.ui.errorInPlane.value,self.ui.errorDepth.value)
+        t2 = time.time()
+        self.ui.resultsLabel.setText("Percentage coverage: "+str(percentage)+"\n"+"Probability: "+str(prob*100)+"% \n Time: "+str(t2-t1)+" seconds \n")
 
 #
 # ProbabilityLogic
@@ -284,8 +286,6 @@ class ProbabilityLogic(ScriptedLoadableModuleLogic):
         reader.GetRASToIJKMatrix(RASToIJKMatrix)
         position = [center[0],center[1],center[2],1]
         center_probe = RASToIJKMatrix.MultiplyPoint(position)
-        print(center_probe)
-        print("up")
         image = reader.GetImageData()
 
         # Create the ellipsoid source
@@ -331,9 +331,6 @@ class ProbabilityLogic(ScriptedLoadableModuleLogic):
         outputLabelmapVolumeNode.CreateDefaultDisplayNodes()
         outputLabelmapVolumeNode.SetName("imageteste")
 
-        print(sphere1.GetRadius())
-        print(image_coverage)
-
         return iceball_coverage / image_coverage
 
     def perturbed_tumor_percentage(self,nrrd, coordinates, sd_x, sd_y, sd_z, radii):
@@ -343,16 +340,14 @@ class ProbabilityLogic(ScriptedLoadableModuleLogic):
         return percentage
 
     def runProbability(self,location,tumor,sd1,sd2):
-
-        location = slicer.util.getNode('F_1')
+        #location = slicer.util.getNode('F_1')
         ras_target = [[0.0, 0.0, 0.0],[0.0, 0.0, 0.0],[0.0, 0.0, 0.0]]
         probeLocation = []
         nOfFiducials = location.GetNumberOfFiducials()
         for n in range(nOfFiducials):
             location.GetNthFiducialPosition(n, ras_target[n])
-        print(ras_target)
-        prob = self.percentage.runQuadrature(ras_target,tumor,sd1,sd2,nOfFiducials)
-        return prob
+        #prob = self.percentage.runQuadrature(ras_target,tumor,sd1,sd2,nOfFiducials)
+        return self.percentage.runQuadrature(ras_target,tumor,sd1,sd2,nOfFiducials)
 
     def setDefaultParameters(self, parameterNode):
         """
@@ -400,8 +395,8 @@ class ProbabilityLogic(ScriptedLoadableModuleLogic):
 # Temporary here to make reload easier.
 #
 
-ICESEED_R = 7.5
-ICESEED_A = 7.5
+ICESEED_R = 12.0
+ICESEED_A = 12.0
 ICESEED_S = 15.0
 
 
@@ -423,7 +418,6 @@ class quad:
             perturbed_y, weights = self.gaussian_quadrature_nodes(num_nodes, center[i][1], SDinplane)
             perturbed_z, weights = self.gaussian_quadrature_nodes(num_nodes, center[i][2], SDdepth)
             coordinate = self.create_coordinates_new(perturbed_x, perturbed_y, perturbed_z)
-            print(coordinate)
             for j in range(num_nodes):
                 coord[i][0+j*3] = coordinate[j][0]
                 coord[i][1+j*3] = coordinate[j][1]
@@ -432,8 +426,6 @@ class quad:
         # perturbed_x, weights = self.gaussian_quadrature_nodes(num_nodes, center[0], SDinplane)
         # perturbed_y, weights = self.gaussian_quadrature_nodes(num_nodes, center[1], SDinplane)
         # perturbed_z, weights = self.gaussian_quadrature_nodes(num_nodes, center[2], SDdepth)
-        print("cade o ruido?")
-        print(coord)
         # coordinates = self.create_coordinates_new(perturbed_x, perturbed_y, perturbed_z)
         return self.perturbed_tumor_percentage(inputVolume, coord, [ICESEED_R, ICESEED_A, ICESEED_S], weights,nOfPoints)
 
@@ -443,7 +435,7 @@ class quad:
 
         # nodes, weights = numpy.polynomial.hermite.hermgauss(n)
         # Map nodes to the interval [-1, 1]
-        # nodes = nodes * 2 - 1
+        nodes = nodes * 2 - 1
         return nodes, weights
 
     def create_coordinates_new(self, x_list, y_list, z_list):
@@ -460,11 +452,17 @@ class quad:
 
     def perturbed_tumor_percentage(self, nrrd, coordinates, radii, weights,nOfProbes):
         tumor_percentages = []
+        prob = []
         for j in range(5): #number of nodes - change
             center = [[coordinates[0][0+j*3],coordinates[0][1+j*3],coordinates[0][2+j*3]],[coordinates[1][0+j*3],coordinates[1][1+j*3],coordinates[1][2+j*3]],[coordinates[2][0+j*3],coordinates[2][1+j*3],coordinates[2][2+j*3]]]
             percentage = self.iceball_coverage_1(nrrd, center,nOfProbes)
             tumor_percentages.append(percentage * weights[j])
-        return numpy.sum(tumor_percentages) / numpy.sum(weights)
+            if percentage >= 0.99:
+                prob.append(weights[j])
+            else:
+                prob.append(0.0)
+        print(tumor_percentages)
+        return numpy.sum(tumor_percentages) / numpy.sum(weights), numpy.sum(prob)/ numpy.sum(weights)
 
     def gaussian_quadrature_nodes(self, num_nodes, center, sd):
         nodes, weights = self.gaussian_quadrature_nodes_weights(num_nodes)
@@ -476,7 +474,7 @@ class quad:
     def getIceballImageData(self, center, Spacing, size_image):
         sphere1 = vtk.vtkImageEllipsoidSource()
         sphere1.SetOutputScalarTypeToShort()
-        sphere1.SetCenter([center[0], center[1], center[2]])
+        sphere1.SetCenter([center[0], center[1], center[2]-3])
         sphere1.SetRadius(ICESEED_R / Spacing[0], ICESEED_A / Spacing[1], ICESEED_S / Spacing[2])
         sphere1.SetWholeExtent(0, size_image[0] - 1, 0, size_image[1] - 1, 0, size_image[2] - 1)
         sphere1.Update()
@@ -523,6 +521,7 @@ class quad:
         reader.GetIJKToRASMatrix(IjkToRasMatrix)
         
         image = reader.GetImageData()
+        image.AllocateScalars(4, 1)
         size_image = image.GetDimensions()
         Spacing = reader.GetSpacing()
 
